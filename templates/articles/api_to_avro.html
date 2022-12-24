@@ -1,0 +1,273 @@
+{% extends "layout.html" %}
+{% block content %}
+<h1>API to AVRO files with Java</h1>
+<h3>Introduction</h3>
+<p>This article shows how we can collect data from API and then output into a file, AVRO was the choice because it is fully typed, binary and with SNAPPY compression it showed about 86 times smaller than a cummom text data that is requested for the API</p>
+<h3>Methods</h3>
+<p>The source data is a <a href="https://servicodados.ibge.gov.br/api/docs/localidades">public brazilian API with cities data</a> and the data can be retrive by running:</p>
+<pre><code>curl --location --request GET 'https://servicodados.ibge.gov.br/api/v1/localidades/municipios'</code></pre>
+<p>Sample item from API request:</p>
+<pre><code>{
+    "id": "1100015",
+    "nome": "Alta Floresta D'Oeste",
+    "microrregiao": {
+        "id": 11006,
+        "nome": "Cacoal",
+        "mesorregiao": {
+            "id": 1102,
+            "nome": "Leste Rondoniense",
+            "UF": {
+                "id": 11,
+                "sigla": "RO",
+                "nome": "Rondônia",
+                "regiao": {
+                    "id": 1,
+                    "sigla": "N",
+                    "nome": "Norte"
+                }
+            }
+        }
+    },
+    "regiao-imediata": {
+        "id": 110005,
+        "nome": "Cacoal",
+        "regiao-intermediaria": {
+            "id": 1102,
+            "nome": "Ji-Paraná",
+            "UF": {
+                "id": 11,
+                "sigla": "RO",
+                "nome": "Rondônia",
+                "regiao": {
+                    "id": 1,
+                    "sigla": "N",
+                    "nome": "Norte"
+                }
+            }
+        }
+    }
+}</code></pre>
+<p>The schema file used:</p>
+<pre><code>{
+    "type" : "record",
+    "name":"municipios",
+    "fields" : [
+        {"name" : "id", "type" : "string"},
+        {"name" : "nome", "type" : "string"},
+        {
+            "name": "microrregiao", 
+            "type": {
+                "type":"record",
+                "name":"microrregioes",
+                "fields":[
+                    {"name":"id", "type":"int"},
+                    {"name":"nome", "type":"string"},
+                    {
+                        "name":"mesorregiao",
+                        "type":{
+                            "type": "record",
+                            "name": "mesoregioes",
+                            "fields": [
+                                {"name":"id", "type":"int"},
+                                {"name":"nome", "type":"string"},
+                                {
+                                    "name":"UF",
+                                        "type":{
+                                            "type": "record",
+                                            "name": "unidades_federativas",
+                                            "fields": [
+                                                {"name":"id", "type":"int"},
+                                                {"name":"sigla", "type":"string"},
+                                                {"name":"nome", "type":"string"},
+                                                {
+                                                    "name":"regiao",
+                                                    "type":{
+                                                        "type": "record",
+                                                        "name": "regioes",
+                                                        "fields": [
+                                                            {"name":"id", "type":"int"},
+                                                            {"name":"sigla", "type":"string"},
+                                                            {"name":"nome", "type":"string"}
+                                                        ]
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        {
+            "name":"regiao_imediata",
+            "type":{
+                "type": "record",
+                "name": "regioes_imediatas",
+                "fields": [
+                    {"name":"id", "type":"int"},
+                    {"name":"nome", "type":"string"},
+                    {
+                        "name":"regiao_intermediaria",
+                        "type":{
+                            "type": "record",
+                            "name": "regioes_intermediarias",
+                            "fields": [
+                                {"name":"id", "type":"int"},
+                                {"name":"nome", "type":"string"},
+                                {
+                                    "name":"UF",
+                                        "type":{
+                                            "type": "record",
+                                            "name": "unidades_federativas_2",
+                                            "fields": [
+                                                {"name":"id", "type":"int"},
+                                                {"name":"sigla", "type":"string"},
+                                                {"name":"nome", "type":"string"},
+                                                {
+                                                    "name":"regiao",
+                                                    "type":{
+                                                        "type": "record",
+                                                        "name": "regioes_2",
+                                                        "fields": [
+                                                            {"name":"id", "type":"int"},
+                                                            {"name":"sigla", "type":"string"},
+                                                            {"name":"nome", "type":"string"}
+                                                        ]
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        }
+    ]
+}</code></pre>
+<p>Finally, the Java code:</p>
+<pre>
+<code class="java">package com.openapi;
+import java.io.File;
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.net.http.HttpResponse.BodyHandlers;
+
+import org.apache.avro.Schema;
+import org.apache.avro.file.CodecFactory;
+import org.apache.avro.file.DataFileWriter;
+import org.apache.avro.generic.GenericData;
+import org.apache.avro.generic.GenericDatumWriter;
+import org.apache.avro.generic.GenericRecord;
+import org.apache.avro.io.DatumWriter;
+
+import tech.allegro.schema.json2avro.converter.JsonAvroConverter;
+import org.json.JSONArray;  
+
+
+/**
+ * Collect data from public API and writes in AVRO files 
+ * 
+ */
+public class App 
+{
+    
+    private static final File FILE = new File("municipios.avro.snappy");
+    private static final String BASE_URL = "https://servicodados.ibge.gov.br/api/v1/localidades";
+
+    public static void main(String[] args) throws Exception, IOException{
+        String data = collectFromHttp();
+        data = data.replace("regiao-intermediaria", "regiao_intermediaria");
+        data = data.replace("regiao-imediata", "regiao_imediata");
+        JSONArray array = new JSONArray(data); 
+
+        /**
+         *  Schema from file
+         */
+        File schemaFile = new File("municipios.avsc");
+        Schema schema;
+        schema = new Schema.Parser().parse(schemaFile);
+
+        /**
+         * Writer object
+         */
+        final DatumWriter<GenericRecord> writer = new GenericDatumWriter<>(schema);
+        DataFileWriter<GenericRecord> fileWriter = new DataFileWriter<>(writer);
+        
+        /**
+         * Snappy Codec
+         */
+        CodecFactory codecFactory = CodecFactory.snappyCodec();
+        fileWriter.setCodec(codecFactory);
+
+        /**
+         * Open writer
+         */
+        fileWriter.create(schema, FILE);
+
+        /**
+         * Iterate each item appending to avro file 
+         */
+        for(Object item: array){
+
+            /**
+             * Convert item to record
+             */
+            JsonAvroConverter converter = new JsonAvroConverter();
+            GenericData.Record record = converter.convertToGenericDataRecord(item.toString().getBytes(), schema);
+            
+            /**
+             * Append to avro
+             */
+            fileWriter.append(record);
+        }
+
+        /*
+         * Close writer, file now should be in a place :)
+         */
+        fileWriter.close();
+        System.out.println("Written to avro data file");
+
+    }
+
+    public static String collectFromHttp() throws Exception{
+        /**
+         * Collect response from a HTTP endpoint  
+         */
+        String request_url = BASE_URL + "/" + "municipios";
+        HttpClient client = HttpClient.newHttpClient();
+        HttpRequest request = HttpRequest.newBuilder().uri(URI.create(request_url)).build();
+        HttpResponse<String> response;
+        
+        /**
+         * Http request 
+         */
+        response = client.send(request, BodyHandlers.ofString());
+
+        /**
+         * If the response isn't 200 (Success) then return empty string 
+         */
+        return (response.statusCode()==200) ? response.body() : "";
+    }
+
+}</code>
+</pre>
+<h3>Results</h3>
+<p>There was a expressive reduction of the data volume, it is a good option when storage efficiency matters and the analytic reading is not very often, since we are using row based format with compression.</p>
+<table border="1">
+    <tr><td>file</td><td>size</td><td>magnitude</td></tr>
+    <tr><td>api-response.json</td><td>12.7</td><td>MB</td></tr>         
+    <tr><td>java-processed.avro.snappy</td><td>146</td><td>KB</td></tr> 
+    <tr><td>difference</td><td colspan="2">≈86 times smaller</td></tr>               
+</table>
+<h3>Comment</h3>
+<p>Because we are dealing with small datasets that volume difference could not seems like a big deal, but think about if your need is to create a script for loading data into a data lake with day, hour, minutes or even seconds of avaiablity requirement? The volume could increase faster than you expect.</p>
+
+<p><a href="https://github.com/venezianluis/ibge-collect-api-java">Click here</a> to access the Github repository.</p>
+{% endblock %}
